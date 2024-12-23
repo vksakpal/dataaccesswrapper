@@ -1,11 +1,13 @@
-﻿using System.Collections.Generic;
+﻿using Microsoft.Data.SqlClient;
+using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Threading.Tasks;
 
 namespace DataAccessWrapper.Sql
 {
     public interface IDbRepository
-    {       
+    {
         /// <summary>
         /// Executes the stored procedure and returns the dataset
         /// </summary>
@@ -13,7 +15,7 @@ namespace DataAccessWrapper.Sql
         /// <param name="parameters"></param>
         /// <param name="outputTableNames"></param>
         /// <returns></returns>
-        DataSet ExecuteAsync(string storedProcedureName, DbParameter[] parameters, List<string> outputTableNames);
+        Task<DataSet> ExecuteAsync(string storedProcedureName, DbParameter[] parameters, List<string> outputTableNames);
 
         /// <summary>
         /// Executes the stored procedure and returns the dataset
@@ -26,42 +28,55 @@ namespace DataAccessWrapper.Sql
 
     public class DbRepository : IDbRepository
     {
-        private readonly string _executionStrategy;
+
 
         private readonly string _primaryDbAlias;
-
+        private readonly ExecutionStrategy _executionStrategy;
         private readonly string _secondaryDbAlias;
 
         public DbRepository(string dbAlias)
         {
             _primaryDbAlias = dbAlias;
-            _executionStrategy = "STANDALONE";
+            _executionStrategy = ExecutionStrategy.StandAlone;
             _secondaryDbAlias = string.Empty;
         }
 
 
         public DbRepository(string primaryDbAlias, string secondaryDbAlias)
         {
-            _executionStrategy = "HOTCOLD";
+            _executionStrategy = ExecutionStrategy.HotCold;
             _primaryDbAlias = primaryDbAlias;
             _secondaryDbAlias = secondaryDbAlias;
         }
 
 
-
-        public DataSet ExecuteAsync(string storedProcedureName, DbParameter[] parameters, List<string> outputTableNames)
+        async Task<DataSet> IDbRepository.ExecuteAsync(string storedProcedureName, DbParameter[] parameters, List<string> outputTableNames)
         {
-            throw new System.NotImplementedException();
-        }
+            DataSet? dataSet = new DataSet();
+            if (_executionStrategy == ExecutionStrategy.HotCold)
+            {
 
-        public DataSet ExecuteAsync(string storedProcedureName, List<string> outputTableNames)
-        {
-            throw new System.NotImplementedException();
-        }
+                IDbStrategy dbStrategy = new HotColdStrategy(_primaryDbAlias, _secondaryDbAlias);
+                _ = await dbStrategy.ExecuteAsync(async (connection) =>
+                {
+                    await connection.OpenAsync();
 
-        DataSet IDbRepository.ExecuteAsync(string storedProcedureName, DbParameter[] parameters, List<string> outputTableNames)
-        {
-            throw new System.NotImplementedException();
+                    using DbCommand command = connection.CreateCommand();
+                    command.CommandText = storedProcedureName;
+                    using DbDataReader dbDataReader = command.ExecuteReader();
+                    dataSet = new DataSet();
+                    if (dbDataReader != null)
+                    {
+                        while (dbDataReader.Read())
+                        {
+                            dataSet.Tables.Add().Load(dbDataReader);
+                        }
+                    }
+
+                });
+            }
+
+            return dataSet;
         }
 
         DataSet IDbRepository.ExecuteAsync(string storedProcedureName, List<string> outputTableNames)
